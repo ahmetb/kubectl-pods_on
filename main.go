@@ -40,6 +40,7 @@ func main() {
 	kubeConfigFlags := addConfigFlags(flagSet)
 	printFlags := addPrintFlags(flagSet)
 	// Add custom flags
+	includeDaemonSets := flagSet.BoolP("include-daemonsets", "D", false, "Include DaemonSet Pods in the output")
 	numWorkers := flagSet.Int64("workers", 20, "number of parallel workers to query pods by node")
 	pprofAddr := flagSet.String("pprof-addr", "", "(dev mode) inspect the program with pprof on the given address at the end")
 	strategy := flagSet.String("strategy", "", "(dev mode) choose a strategy to query pods (by-node, all-pods)")
@@ -110,6 +111,11 @@ func main() {
 	}
 	klog.V(1).Infof("query matched %d pods", len(pods))
 
+	// Filter out daemonset pods if not requested
+	if !*includeDaemonSets {
+		pods = filterDaemonSetPods(pods)
+	}
+
 	// Print the results
 	if err := print(pods, printFlags); err != nil {
 		klog.Fatalf("print error: %v", err)
@@ -144,4 +150,23 @@ func resolveNodeNames(nodeClient typedcorev1.NodeInterface, selectors []labels.S
 	}
 	klog.V(3).Infof("matching node selectors took %d", time.Since(start))
 	return nodes, len(nodeList.Items), nil
+}
+
+// filterDaemonSetPods returns a new slice of pods that are not part of a DaemonSet.
+func filterDaemonSetPods(pods []corev1.Pod) []corev1.Pod {
+	var out []corev1.Pod
+	for _, pod := range pods {
+		var dsOwned bool
+		for _, owner := range pod.OwnerReferences {
+			if owner.Kind == "DaemonSet" {
+				dsOwned = true
+				break
+			}
+		}
+		if !dsOwned {
+			out = append(out, pod)
+		}
+	}
+	klog.V(2).Infof("filtered out %d DaemonSet pods out of %d", len(pods)-len(out), len(pods))
+	return out
 }
