@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -33,8 +36,25 @@ import (
 
 func main() {
 	// Set up flags
-	flagSet := pflag.NewFlagSet("kubectl pods-on", pflag.ExitOnError)
-	pflag.CommandLine = flagSet
+	flagSet := pflag.NewFlagSet("", pflag.ExitOnError)
+	flagSet.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage:
+	kubectl pods-on [flags] [node name or selector...]
+
+Examples:
+	kubectl pods-on node1 node2
+	kubectl pods-on nodelabel=value
+	kubectl pods-on "nodelabel in (value1, value2)"
+
+Caveats:
+	If this command runs slow on large clusters, tune the
+	--workers and/or --strategy flags to choose a different
+	query strategy.
+
+Options:`)
+		flagSet.PrintDefaults()
+	}
+
 	// Add kubectl flags
 	addKlogFlags(flagSet)
 	kubeConfigFlags := addConfigFlags(flagSet)
@@ -44,7 +64,7 @@ func main() {
 	numWorkers := flagSet.Int64("workers", 20, "number of parallel workers to query pods by node")
 	pprofAddr := flagSet.String("pprof-addr", "", "(dev mode) inspect the program with pprof on the given address at the end")
 	strategy := flagSet.String("strategy", "", "(dev mode) choose a strategy to query pods (by-node, all-pods)")
-	pflag.Parse()
+	flagSet.Parse(os.Args[1:])
 
 	// Start pprof server if configured
 	if *pprofAddr != "" {
@@ -56,7 +76,7 @@ func main() {
 		}()
 	}
 
-	posArgs := pflag.Args()
+	posArgs := flagSet.Args()
 	klog.V(3).Info("positional arguments: ", posArgs)
 	selectors, nodeNames, err := parsePosArgs(posArgs)
 	if err != nil {
@@ -116,6 +136,9 @@ func main() {
 		pods = filterDaemonSetPods(pods)
 	}
 
+	// Consistent ordering for the output
+	slices.SortFunc(pods, cmpPod)
+
 	// Print the results
 	if err := print(pods, printFlags); err != nil {
 		klog.Fatalf("print error: %v", err)
@@ -169,4 +192,15 @@ func filterDaemonSetPods(pods []corev1.Pod) []corev1.Pod {
 	}
 	klog.V(2).Infof("filtered out %d DaemonSet pods out of %d", len(pods)-len(out), len(pods))
 	return out
+}
+
+// cmpPod sorts pods by node name, then by namespace, then by name.
+func cmpPod(a, b corev1.Pod) int {
+	if a.Spec.NodeName != b.Spec.NodeName {
+		return strings.Compare(a.Spec.NodeName, b.Spec.NodeName)
+	}
+	if a.Namespace != b.Namespace {
+		return strings.Compare(a.Namespace, b.Namespace)
+	}
+	return strings.Compare(a.Name, b.Name)
 }

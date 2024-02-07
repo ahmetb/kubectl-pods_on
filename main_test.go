@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,4 +29,20 @@ func TestFilterDaemonSetPods(t *testing.T) {
 
 	out := filterDaemonSetPods([]corev1.Pod{p1, p2, p3})
 	require.ElementsMatch(t, []corev1.Pod{p1, p2}, out)
+}
+
+func TestCmpPod(t *testing.T) {
+	p_n1_a_a := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "a"}, Spec: corev1.PodSpec{NodeName: "node1"}}
+	p_n1_b_a := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "b", Name: "a"}, Spec: corev1.PodSpec{NodeName: "node1"}}
+	p_n1_a_b := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "b"}, Spec: corev1.PodSpec{NodeName: "node1"}}
+	p_n2_a_a := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: "a"}, Spec: corev1.PodSpec{NodeName: "node2"}}
+
+	v := []corev1.Pod{
+		p_n2_a_a,
+		p_n1_a_b,
+		p_n1_b_a,
+		p_n1_a_a}
+	slices.SortFunc(v, cmpPod)
+
+	require.Equal(t, []corev1.Pod{p_n1_a_a, p_n1_a_b, p_n1_b_a, p_n2_a_a}, v)
 }
