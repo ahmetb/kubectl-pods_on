@@ -47,7 +47,19 @@ set of Nodes, you'll find this plugin useful.
 
 ### Installation
 
-Until it is packaged as a kubectl plugin via Krew, you can install it manually:
+#### Install using Krew
+
+1. Install [Krew](https://krew.sigs.k8s.io) using [its installation
+   guide](https://krew.sigs.k8s.io/docs/user-guide/setup/install/).
+
+1. Run `kubectl krew install pods-on`.
+
+1. `kubectl pods-on` is ready to use!
+
+#### Install using `go` (not recommended)
+
+In this method, you will not receive any updates to the plugin unless you
+manually run `go install` again.
 
 1. ```sh
    go install github.com/ahmetb/kubectl-pods_on@latest
