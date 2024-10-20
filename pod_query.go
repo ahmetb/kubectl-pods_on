@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,52 +25,113 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	"k8s.io/kubectl/pkg/scheme"
 )
 
-func findPodsByQueryingAllPods(ctx context.Context, client typedcorev1.PodInterface, nodeNames sets.Set[string]) ([]corev1.Pod, error) {
-	start := time.Now()
-	pods, err := client.List(ctx, metav1.ListOptions{})
+func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient, nodeNames sets.Set[string]) (metav1.Table, error) {
+	resp, err := queryPods(ctx, restClient, podQueryOpts{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list all pods in the cluster: %w", err)
+		return metav1.Table{}, fmt.Errorf("failed to list pods: %w", err)
 	}
-	klog.V(1).Infof("listing all pods took %v (found %d pods)", time.Since(start), len(pods.Items))
-
-	var out []corev1.Pod
-	for _, pod := range pods.Items {
-		if nodeNames.Has(pod.Spec.NodeName) {
-			out = append(out, pod)
+	var filtered []metav1.TableRow
+	for _, tableRow := range resp.Rows {
+		if nodeNames.Has(tableRow.Object.Object.(*corev1.Pod).Spec.NodeName) {
+			filtered = append(filtered, tableRow)
 		}
 	}
-	klog.V(2).Infof("matched %d pods on %d nodes", len(out), nodeNames.Len())
-	return out, nil
+	resp.Rows = filtered
+
+	klog.V(2).Infof("matched %d pods on %d nodes", len(filtered), nodeNames.Len())
+	return resp, nil
 }
 
 // findPodsByQueryingNodesInParallel performs parallel queries to list pods by node.
-func findPodsByQueryingNodesInParallel(ctx context.Context, client typedcorev1.PodInterface, nodeNames []string, numWorkers int64) ([]corev1.Pod, error) {
+func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RESTClient, nodeNames []string, numWorkers int64) (metav1.Table, error) {
 	var (
+		out metav1.Table
 		mu  sync.Mutex
-		out []corev1.Pod
 	)
 
 	g := semgroup.NewGroup(ctx, numWorkers)
 	for _, n := range nodeNames {
 		node := n
 		g.Go(func() error {
-			start := time.Now()
-			l, err := client.List(ctx, metav1.ListOptions{
-				FieldSelector: "spec.nodeName=" + node})
+			resp, err := queryPods(ctx, restClient, podQueryOpts{fieldSelectorNodeName: node})
 			if err != nil {
-				return fmt.Errorf("failed to list pods on node %s: %w", node, err)
+				return fmt.Errorf("failed to list pods on node %q: %w", node, err)
 			}
-			klog.V(5).Infof("listing pods on node %q took %v", node, time.Since(start).Truncate(time.Millisecond))
+
 			mu.Lock()
-			out = append(out, l.Items...)
+			if out.Rows == nil {
+				out = resp
+			} else {
+				// append to the existing table
+				out.Rows = append(out.Rows, resp.Rows...)
+
+				// pick the highest resource version
+				if strings.Compare(resp.ResourceVersion, out.ResourceVersion) > 0 {
+					out.ResourceVersion = resp.ResourceVersion
+				}
+			}
 			mu.Unlock()
 			return nil
 		})
 	}
 	err := g.Wait()
 	return out, err
+}
+
+// parsePods parses untyped pod object (RawExtension) in table rows into corev1.Pod.
+func parsePods(t *metav1.Table) error {
+	for i, row := range t.Rows {
+		if row.Object.Object != nil {
+			if _, ok := row.Object.Object.(*corev1.Pod); !ok {
+				return fmt.Errorf("unexpected object type in row %d: %T (expected corev1.Pod)", i, row.Object.Object)
+			}
+		} else {
+			// use serializer to parse pod from Object.Raw
+			pod, _, err := scheme.Codecs.UniversalDeserializer().Decode(row.Object.Raw, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to decode pod in row %d: %w", i, err)
+			}
+			row.Object.Object = pod
+			t.Rows[i] = row
+		}
+	}
+	return nil
+}
+
+type podQueryOpts struct {
+	fieldSelectorNodeName string
+}
+
+func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOpts) (metav1.Table, error) {
+	start := time.Now()
+	// query pods on each node in parallel
+	var tableResp metav1.Table
+	req := restClient.Get().
+		Resource("pods").
+		SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io,application/json").
+		Param("includeObject", string(metav1.IncludeObject))
+
+	if opts.fieldSelectorNodeName != "" {
+		req = req.Param("fieldSelector", "spec.nodeName="+opts.fieldSelectorNodeName)
+	}
+
+	result := req.Do(ctx)
+	if err := result.Error(); err != nil {
+		return metav1.Table{}, fmt.Errorf("failed to list pods from kubernetes api: %w", err)
+	}
+	if err := result.Into(&tableResp); err != nil {
+		return metav1.Table{}, fmt.Errorf("failed to unmarshal list pods response into metav1.Table: %w", err)
+	}
+
+	klog.V(1).Infof("listed pods, took %v (found %d pods)", time.Since(start).Truncate(time.Millisecond), len(tableResp.Rows))
+	// parse raw ([]byte) pod objects into corev1.Pod
+	if err := parsePods(&tableResp); err != nil {
+		return metav1.Table{}, fmt.Errorf("failed to parse pods in the table response: %w", err)
+	}
+	return tableResp, nil
 }

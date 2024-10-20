@@ -48,6 +48,10 @@ func chooseStrategy(heuristicTotalNodes, matchedNodes int) podQueryStrategy {
 	//     - "get all pods" (matched 771 pods out of 16000): 22s.
 	//     - "get pods by node in parallel" workers=20: 9s.
 
+	if matchedNodes == 1 { // single node: never need to query all pods in parallel
+		return queryPodPerNodeInParallel
+	}
+
 	if heuristicTotalNodes == 0 {
 		// we didn't query nodes by selectors (so we don't know the total number of nodes)
 		// which means user probably specified "a few nodes"
@@ -62,7 +66,7 @@ func chooseStrategy(heuristicTotalNodes, matchedNodes int) podQueryStrategy {
 	if ratio < magicRatio {
 		return queryPodPerNodeInParallel
 	} else {
-		klog.Infof("query matched %d nodes, querying all pods in the cluster (it may be slow)", matchedNodes)
+		klog.Infof("FYI: node selector matched %d nodes, resorting to querying all pods in the cluster, and filtering them client-side (slow & expensive query in large clusters!)", matchedNodes)
 		return queryAllPods
 	}
 }

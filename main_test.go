@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestFilterDaemonSetPods(t *testing.T) {
@@ -27,8 +28,15 @@ func TestFilterDaemonSetPods(t *testing.T) {
 		{Kind: "DaemonSet", Name: "ds1", UID: "ds1-uid"},
 	}
 
-	out := filterDaemonSetPods([]corev1.Pod{p1, p2, p3})
-	require.ElementsMatch(t, []corev1.Pod{p1, p2}, out)
+	out := filterDaemonSetPods(metav1.Table{Rows: []metav1.TableRow{
+		{Object: runtime.RawExtension{Object: &p1}},
+		{Object: runtime.RawExtension{Object: &p2}},
+		{Object: runtime.RawExtension{Object: &p3}},
+	}})
+	require.ElementsMatch(t, []metav1.TableRow{
+		{Object: runtime.RawExtension{Object: &p1}},
+		{Object: runtime.RawExtension{Object: &p2}},
+	}, out.Rows)
 }
 
 func TestCmpPod(t *testing.T) {

@@ -28,13 +28,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	"k8s.io/kubectl/pkg/scheme"
+	"k8s.io/utils/ptr"
 )
 
 func main() {
+	ctx := context.Background()
+
 	// Set up flags
 	flagSet := pflag.NewFlagSet("", pflag.ExitOnError)
 	flagSet.Usage = func() {
@@ -54,6 +60,8 @@ Caveats:
 Options:`)
 		flagSet.PrintDefaults()
 	}
+
+	utilruntime.Must(metav1.AddMetaToScheme(scheme.Scheme))
 
 	// Add kubectl flags
 	addKlogFlags(flagSet)
@@ -99,7 +107,7 @@ Options:`)
 	matchedNodes := sets.New[string](nodeNames...)
 	if len(selectors) > 0 {
 		klog.V(3).Info("resolving node selectors: ", selectors)
-		out, n, err := resolveNodeNames(clientset.CoreV1().Nodes(), selectors)
+		out, n, err := resolveNodeNames(ctx, clientset.CoreV1().Nodes(), selectors)
 		if err != nil {
 			klog.Fatalf("failed to resolve nodes by selectors: %v", err)
 		}
@@ -116,31 +124,36 @@ Options:`)
 	}
 	klog.V(1).Infof("pod query strategy: %q", queryStrategy)
 
-	var pods []corev1.Pod
+	podsRestClient, err := makePodsRESTClient(kubeConfigFlags.ToRESTConfig)
+	if err != nil {
+		klog.Fatalf("failed to create REST client: %v", err)
+	}
+
+	var resp metav1.Table
 	switch queryStrategy {
 	case queryAllPods:
-		pods, err = findPodsByQueryingAllPods(context.Background(), clientset.CoreV1().Pods(""), matchedNodes)
+		resp, err = findPodsByQueryingAllPods(ctx, podsRestClient, matchedNodes)
 	case queryPodPerNodeInParallel:
 		klog.V(1).Infof("querying list of pods on each node in parallel (workers: %d)", *numWorkers)
-		pods, err = findPodsByQueryingNodesInParallel(context.Background(), clientset.CoreV1().Pods(""), matchedNodes.UnsortedList(), *numWorkers)
+		resp, err = findPodsByQueryingNodesInParallel(ctx, podsRestClient, matchedNodes.UnsortedList(), *numWorkers)
 	default:
 		klog.Fatalf("unknown pod query strategy: %q", queryStrategy)
 	}
 	if err != nil {
 		klog.Fatalf("failed to query pods from Kubernetes API: %v", err)
 	}
-	klog.V(1).Infof("query matched %d pods", len(pods))
+	klog.V(1).Infof("query matched %d pods", len(resp.Rows))
 
 	// Filter out daemonset pods if not requested
 	if !*includeDaemonSets {
-		pods = filterDaemonSetPods(pods)
+		resp = filterDaemonSetPods(resp)
 	}
 
 	// Consistent ordering for the output
-	slices.SortFunc(pods, cmpPod)
+	slices.SortFunc(resp.Rows, cmpPodRow)
 
 	// Print the results
-	if err := print(pods, printFlags); err != nil {
+	if err := print(resp, printFlags); err != nil {
 		klog.Fatalf("print error: %v", err)
 	}
 
@@ -151,11 +164,24 @@ Options:`)
 	}
 }
 
+func makePodsRESTClient(makeRestCfg restCfgFactory) (*rest.RESTClient, error) {
+	restCfg, err := makeRestCfg()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create REST config for pods rest client: %w", err)
+	}
+
+	restCfg.APIPath = "/api"
+	restCfg.GroupVersion = ptr.To(corev1.SchemeGroupVersion)
+	restCfg.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
+	restCfg.UserAgent = "kubectl-pods_on"
+	return rest.RESTClientFor(restCfg)
+}
+
 // resolveNodeNames returns the names of nodes that match the given selectors,
 // and the total number of nodes in the cluster.
-func resolveNodeNames(nodeClient typedcorev1.NodeInterface, selectors []labels.Selector) (sets.Set[string], int, error) {
+func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface, selectors []labels.Selector) (sets.Set[string], int, error) {
 	start := time.Now()
-	nodeList, err := nodeClient.List(context.Background(), metav1.ListOptions{})
+	nodeList, err := nodeClient.List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list nodes in the cluster: %w", err)
 	}
@@ -171,30 +197,39 @@ func resolveNodeNames(nodeClient typedcorev1.NodeInterface, selectors []labels.S
 			}
 		}
 	}
-	klog.V(3).Infof("matching node selectors took %d", time.Since(start))
+	klog.V(3).Infof("matching node selectors took %s", time.Since(start).Truncate(time.Millisecond))
 	return nodes, len(nodeList.Items), nil
 }
 
 // filterDaemonSetPods returns a new slice of pods that are not part of a DaemonSet.
-func filterDaemonSetPods(pods []corev1.Pod) []corev1.Pod {
-	var out []corev1.Pod
-	for _, pod := range pods {
+func filterDaemonSetPods(in metav1.Table) metav1.Table {
+	var filtered []metav1.TableRow
+	for _, podRow := range in.Rows {
 		var dsOwned bool
-		for _, owner := range pod.OwnerReferences {
+		for _, owner := range podRow.Object.Object.(*corev1.Pod).OwnerReferences {
 			if owner.Kind == "DaemonSet" {
 				dsOwned = true
 				break
 			}
 		}
 		if !dsOwned {
-			out = append(out, pod)
+			filtered = append(filtered, podRow)
 		}
 	}
-	klog.V(2).Infof("filtered out %d DaemonSet pods out of %d", len(pods)-len(out), len(pods))
-	return out
+	klog.V(2).Infof("filtered out %d DaemonSet pods out of %d", len(in.Rows)-len(filtered), len(in.Rows))
+	in.Rows = filtered
+	return in
 }
 
-// cmpPod sorts pods by node name, then by namespace, then by name.
+// cmpPodRow sorts pods by node name, then by namespace, then by name.
+func cmpPodRow(rowA, rowB metav1.TableRow) int {
+	a := rowA.Object.Object.(*corev1.Pod)
+	b := rowB.Object.Object.(*corev1.Pod)
+	return cmpPod(*a, *b)
+}
+
+// cmpPod sorts pods by node name, then by namespace, then by pod name
+// (as that's the order we print them in table layout).
 func cmpPod(a, b corev1.Pod) int {
 	if a.Spec.NodeName != b.Spec.NodeName {
 		return strings.Compare(a.Spec.NodeName, b.Spec.NodeName)
@@ -204,3 +239,5 @@ func cmpPod(a, b corev1.Pod) int {
 	}
 	return strings.Compare(a.Name, b.Name)
 }
+
+type restCfgFactory func() (*rest.Config, error)

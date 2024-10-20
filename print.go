@@ -18,6 +18,7 @@ import (
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/klog/v2"
@@ -26,22 +27,33 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func print(pods []corev1.Pod, printFlags *kubectlget.PrintFlags) error {
+func print(resp metav1.Table, printFlags *kubectlget.PrintFlags) error {
 	resourcePrinter, err := printFlags.ToPrinter()
 	if err != nil {
 		klog.Fatalf("failed to get printer: %v", err)
 	}
 	var obj runtime.Object
-	outFmt := ptr.Deref(printFlags.OutputFormat, "")
-	switch outFmt {
+
+	switch ptr.Deref(printFlags.OutputFormat, "") {
+	case "", "wide":
+		// do nothing since the default format is table.
+		obj = ptr.To(enhanceTable(resp))
 	case "name":
 		klog.Fatal("output format 'name' is not supported in this plugin since the format doesn't contain namespace references")
-	case "", "wide":
-		obj = makeTable(pods)
 	default:
-		obj = &corev1.PodList{Items: pods}
+		// other formats (json, yaml, etc), convert to PodList
+		obj = toPodList(resp)
 	}
 	p := printers.NewTypeSetter(scheme.Scheme).ToPrinter(resourcePrinter)
 
 	return p.PrintObj(obj, os.Stdout)
+}
+
+func toPodList(resp metav1.Table) *corev1.PodList {
+	var list corev1.PodList
+	for _, row := range resp.Rows {
+		list.Items = append(list.Items, *row.Object.Object.(*corev1.Pod))
+	}
+	list.ListMeta = resp.ListMeta
+	return &list
 }
