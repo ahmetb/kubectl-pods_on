@@ -48,14 +48,15 @@ func main() {
 	kubectl pods-on [flags] [node name or selector...]
 
 Examples:
-	kubectl pods-on node1 node2
-	kubectl pods-on nodelabel=value
+	kubectl pods-on node1.example.com node2.example.com
+	kubectl pods-on node-label=foo
 	kubectl pods-on "nodelabel in (value1, value2)"
 
 Caveats:
-	If this command runs slow on large clusters, tune the
-	--workers and/or --strategy flags to choose a different
-	query strategy.
+	If this command runs slow on large clusters for you, it's probably because
+	it's querying all pods in the cluster and doing a client-side filtering (as
+	it might be faster than querying pods on each node in parallel).  You can
+	manually tune the query strategy with --workers/--strategy flags.
 
 Options:`)
 		flagSet.PrintDefaults()
