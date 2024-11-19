@@ -28,11 +28,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/pager"
 	"k8s.io/klog/v2"
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/utils/ptr"
@@ -182,15 +184,28 @@ func makePodsRESTClient(makeRestCfg restCfgFactory) (*rest.RESTClient, error) {
 // and the total number of nodes in the cluster.
 func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface, selectors []labels.Selector) (sets.Set[string], int, error) {
 	start := time.Now()
-	nodeList, err := nodeClient.List(ctx, metav1.ListOptions{})
+
+	var nodeList []*corev1.Node
+	// Use a pager to handle paginated node listing
+	p := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+		return nodeClient.List(ctx, opts)
+	})
+
+	err := p.EachListItem(ctx, metav1.ListOptions{
+		Limit: 500, // pagination!
+	}, func(obj runtime.Object) error {
+		nodeList = append(nodeList, obj.(*corev1.Node))
+		return nil
+	})
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list nodes in the cluster: %w", err)
 	}
-	klog.V(3).Infof("list nodes took %v (%d nodes)", time.Since(start), len(nodeList.Items))
+
+	klog.V(3).Infof("list nodes took %v (%d nodes)", time.Since(start), len(nodeList))
 
 	start = time.Now()
 	nodes := sets.New[string]()
-	for _, node := range nodeList.Items {
+	for _, node := range nodeList {
 		for _, selector := range selectors {
 			if selector.Matches(labels.Set(node.Labels)) {
 				nodes.Insert(node.Name)
@@ -199,7 +214,7 @@ func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface,
 		}
 	}
 	klog.V(3).Infof("matching node selectors took %s", time.Since(start).Truncate(time.Millisecond))
-	return nodes, len(nodeList.Items), nil
+	return nodes, len(nodeList), nil
 }
 
 // filterDaemonSetPods returns a new slice of pods that are not part of a DaemonSet.

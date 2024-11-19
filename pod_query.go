@@ -109,23 +109,47 @@ type podQueryOpts struct {
 
 func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOpts) (metav1.Table, error) {
 	start := time.Now()
-	// query pods on each node in parallel
 	var tableResp metav1.Table
-	req := restClient.Get().
-		Resource("pods").
-		SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io,application/json").
-		Param("includeObject", string(metav1.IncludeObject))
+	var continueToken string
+	var page int
+	for {
+		pageStart := time.Now()
+		var resp metav1.Table
+		req := restClient.Get().
+			Resource("pods").
+			SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io,application/json").
+			Param("includeObject", string(metav1.IncludeObject)).
+			Param("limit", "1000")
+		if opts.fieldSelectorNodeName != "" {
+			req = req.Param("fieldSelector", "spec.nodeName="+opts.fieldSelectorNodeName)
+		}
+		if continueToken != "" {
+			req = req.Param("continue", continueToken)
+		}
 
-	if opts.fieldSelectorNodeName != "" {
-		req = req.Param("fieldSelector", "spec.nodeName="+opts.fieldSelectorNodeName)
-	}
+		result := req.Do(ctx)
+		if err := result.Error(); err != nil {
+			return metav1.Table{}, fmt.Errorf("failed to list pods from kubernetes api: %w", err)
+		}
+		if err := result.Into(&resp); err != nil {
+			return metav1.Table{}, fmt.Errorf("failed to unmarshal list pods response into metav1.Table: %w", err)
+		}
+		klog.V(3).Infof("page %d: listed %d pods (took %v)", page, len(resp.Rows), time.Since(pageStart).Truncate(time.Millisecond))
 
-	result := req.Do(ctx)
-	if err := result.Error(); err != nil {
-		return metav1.Table{}, fmt.Errorf("failed to list pods from kubernetes api: %w", err)
-	}
-	if err := result.Into(&tableResp); err != nil {
-		return metav1.Table{}, fmt.Errorf("failed to unmarshal list pods response into metav1.Table: %w", err)
+		if continueToken == "" {
+			tableResp = resp
+		} else {
+			tableResp.Rows = append(tableResp.Rows, resp.Rows...) // append to the existing table
+			tableResp.ResourceVersion = max(tableResp.ResourceVersion, resp.ResourceVersion)
+		}
+
+		if resp.Continue == "" {
+			klog.V(3).Info("pagination: no continue token, stop paginating")
+			break
+		} else {
+			continueToken = resp.Continue
+			page++
+		}
 	}
 
 	klog.V(1).Infof("listed pods, took %v (found %d pods)", time.Since(start).Truncate(time.Millisecond), len(tableResp.Rows))
@@ -133,5 +157,6 @@ func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOp
 	if err := parsePods(&tableResp); err != nil {
 		return metav1.Table{}, fmt.Errorf("failed to parse pods in the table response: %w", err)
 	}
+
 	return tableResp, nil
 }
