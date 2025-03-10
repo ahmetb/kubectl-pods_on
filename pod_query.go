@@ -113,6 +113,7 @@ func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOp
 	var continueToken string
 	var page int
 	for {
+		klog.V(3).Infof("starting GET pods query opts=%v page=%d", opts, page)
 		pageStart := time.Now()
 		var resp metav1.Table
 		req := restClient.Get().
@@ -134,7 +135,7 @@ func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOp
 		if err := result.Into(&resp); err != nil {
 			return metav1.Table{}, fmt.Errorf("failed to unmarshal list pods response into metav1.Table: %w", err)
 		}
-		klog.V(3).Infof("page %d: listed %d pods (took %v)", page, len(resp.Rows), time.Since(pageStart).Truncate(time.Millisecond))
+		klog.V(3).Infof("opts=%v page=%d: listed %d pods (took %v)", opts, page, len(resp.Rows), time.Since(pageStart).Truncate(time.Millisecond))
 
 		if continueToken == "" {
 			tableResp = resp
