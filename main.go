@@ -75,6 +75,7 @@ Options:`)
 	numWorkers := flagSet.Int64("workers", 20, "number of parallel workers to query pods by node")
 	pprofAddr := flagSet.String("pprof-addr", "", "(dev mode) inspect the program with pprof on the given address at the end")
 	strategy := flagSet.String("strategy", "", "(dev mode) choose a strategy to query pods (by-node, all-pods)")
+	useWatchCache := flagSet.Bool("use-apiserver-cache", true, "hit apiserver's watch cache to list pods, by specifying rv=0 (default: true)")
 	flagSet.Parse(os.Args[1:])
 
 	// Start pprof server if configured
@@ -106,11 +107,12 @@ Options:`)
 		klog.Fatalf("failed to create clientset: %v", err)
 	}
 
+	klog.V(3).Info("use apiserver watch cache: ", *useWatchCache)
 	var heuristicTotalNodes int
-	matchedNodes := sets.New[string](nodeNames...)
+	matchedNodes := sets.New(nodeNames...)
 	if len(selectors) > 0 {
 		klog.V(3).Info("resolving node selectors: ", selectors)
-		out, n, err := resolveNodeNames(ctx, clientset.CoreV1().Nodes(), selectors)
+		out, n, err := resolveNodeNames(ctx, clientset.CoreV1().Nodes(), selectors, *useWatchCache)
 		if err != nil {
 			klog.Fatalf("failed to resolve nodes by selectors: %v", err)
 		}
@@ -135,10 +137,10 @@ Options:`)
 	var resp metav1.Table
 	switch queryStrategy {
 	case queryAllPods:
-		resp, err = findPodsByQueryingAllPods(ctx, podsRestClient, matchedNodes)
+		resp, err = findPodsByQueryingAllPods(ctx, podsRestClient, matchedNodes, *useWatchCache)
 	case queryPodPerNodeInParallel:
 		klog.V(1).Infof("querying list of pods on each node in parallel (workers: %d)", *numWorkers)
-		resp, err = findPodsByQueryingNodesInParallel(ctx, podsRestClient, matchedNodes.UnsortedList(), *numWorkers)
+		resp, err = findPodsByQueryingNodesInParallel(ctx, podsRestClient, matchedNodes.UnsortedList(), *numWorkers, *useWatchCache)
 	default:
 		klog.Fatalf("unknown pod query strategy: %q", queryStrategy)
 	}
@@ -159,6 +161,7 @@ Options:`)
 	if err := print(resp, printFlags); err != nil {
 		klog.Fatalf("print error: %v", err)
 	}
+	klog.V(3).Infof("print done", "rows", len(resp.Rows))
 
 	// if pprof server is configured, keep the program running
 	if *pprofAddr != "" {
@@ -182,7 +185,8 @@ func makePodsRESTClient(makeRestCfg restCfgFactory) (*rest.RESTClient, error) {
 
 // resolveNodeNames returns the names of nodes that match the given selectors,
 // and the total number of nodes in the cluster.
-func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface, selectors []labels.Selector) (sets.Set[string], int, error) {
+func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface, selectors []labels.Selector,
+	useWatchCache bool) (sets.Set[string], int, error) {
 	start := time.Now()
 
 	var nodeList []*corev1.Node
@@ -191,9 +195,13 @@ func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface,
 		return nodeClient.List(ctx, opts)
 	})
 
-	err := p.EachListItem(ctx, metav1.ListOptions{
+	listOpts := metav1.ListOptions{
 		Limit: 500, // pagination!
-	}, func(obj runtime.Object) error {
+	}
+	if useWatchCache {
+		listOpts.ResourceVersion = "0"
+	}
+	err := p.EachListItem(ctx, listOpts, func(obj runtime.Object) error {
 		nodeList = append(nodeList, obj.(*corev1.Node))
 		return nil
 	})
@@ -201,7 +209,7 @@ func resolveNodeNames(ctx context.Context, nodeClient typedcorev1.NodeInterface,
 		return nil, 0, fmt.Errorf("failed to list nodes in the cluster: %w", err)
 	}
 
-	klog.V(3).Infof("list nodes took %v (%d nodes)", time.Since(start), len(nodeList))
+	klog.V(3).Infof("list nodes took %v (returned %d nodes)", time.Since(start), len(nodeList))
 
 	start = time.Now()
 	nodes := sets.New[string]()

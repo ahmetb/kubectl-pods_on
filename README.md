@@ -13,6 +13,7 @@ set of Nodes, you'll find this plugin useful.
 - Supports `-o/--output=json|yaml|wide|jsonpath|go-template|...` formats (just
   like `kubectl`)
 - Performance optimizations like parallel queries.
+- Use API Server's watch-cache to serve list-pods-by-node queries 20x-30x faster.
 - Runs fast on large clusters, as it employs different query strategies based on
   the cluster size.
 

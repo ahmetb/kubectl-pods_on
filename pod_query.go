@@ -30,8 +30,9 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
-func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient, nodeNames sets.Set[string]) (metav1.Table, error) {
-	resp, err := queryPods(ctx, restClient, podQueryOpts{})
+func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient, nodeNames sets.Set[string],
+	useWatchCache bool) (metav1.Table, error) {
+	resp, err := queryPods(ctx, restClient, podQueryOpts{useWatchCache: useWatchCache})
 	if err != nil {
 		return metav1.Table{}, fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -48,7 +49,8 @@ func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient,
 }
 
 // findPodsByQueryingNodesInParallel performs parallel queries to list pods by node.
-func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RESTClient, nodeNames []string, numWorkers int64) (metav1.Table, error) {
+func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RESTClient, nodeNames []string,
+	numWorkers int64, useWatchCache bool) (metav1.Table, error) {
 	var (
 		out metav1.Table
 		mu  sync.Mutex
@@ -58,7 +60,10 @@ func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RES
 	for _, n := range nodeNames {
 		node := n
 		g.Go(func() error {
-			resp, err := queryPods(ctx, restClient, podQueryOpts{fieldSelectorNodeName: node})
+			resp, err := queryPods(ctx, restClient, podQueryOpts{
+				fieldSelectorNodeName: node,
+				useWatchCache:         useWatchCache,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to list pods on node %q: %w", node, err)
 			}
@@ -105,6 +110,7 @@ func parsePods(t *metav1.Table) error {
 
 type podQueryOpts struct {
 	fieldSelectorNodeName string
+	useWatchCache         bool
 }
 
 func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOpts) (metav1.Table, error) {
@@ -123,6 +129,9 @@ func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOp
 			Param("limit", "1000")
 		if opts.fieldSelectorNodeName != "" {
 			req = req.Param("fieldSelector", "spec.nodeName="+opts.fieldSelectorNodeName)
+		}
+		if opts.useWatchCache {
+			req = req.Param("resourceVersion", "0")
 		}
 		if continueToken != "" {
 			req = req.Param("continue", continueToken)
