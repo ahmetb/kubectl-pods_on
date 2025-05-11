@@ -13,7 +13,7 @@ require (
 	k8s.io/client-go v0.29.1
 	k8s.io/klog/v2 v2.110.1
 	k8s.io/kubectl v0.29.1
-	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
+	k8s.io/utils v0.0.0-20250502105355-0f33e8f1c979
 )
 
 require (
