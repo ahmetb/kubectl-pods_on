@@ -11,7 +11,7 @@ require (
 	k8s.io/apimachinery v0.29.1
 	k8s.io/cli-runtime v0.29.1
 	k8s.io/client-go v0.29.1
-	k8s.io/klog/v2 v2.110.1
+	k8s.io/klog/v2 v2.130.1
 	k8s.io/kubectl v0.29.1
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
 )
@@ -26,7 +26,7 @@ require (
 	github.com/exponent-io/jsonpath v0.0.0-20151013193312-d6023ce2651d // indirect
 	github.com/fvbommel/sortorder v1.1.0 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
-	github.com/go-logr/logr v1.3.0 // indirect
+	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
