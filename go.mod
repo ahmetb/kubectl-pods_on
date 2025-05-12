@@ -4,7 +4,7 @@ go 1.21.5
 
 require (
 	github.com/fatih/semgroup v1.2.0
-	github.com/spf13/cobra v1.8.0
+	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.8.4
 	k8s.io/api v0.29.1
