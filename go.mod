@@ -3,7 +3,7 @@ module github.com/ahmetb/kubectl-pods_on
 go 1.21.5
 
 require (
-	github.com/fatih/semgroup v1.2.0
+	github.com/fatih/semgroup v1.3.0
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.8.4
@@ -62,7 +62,7 @@ require (
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect
-	golang.org/x/sync v0.5.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/term v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
