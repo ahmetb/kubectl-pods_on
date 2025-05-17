@@ -161,7 +161,7 @@ Options:`)
 	if err := print(resp, printFlags); err != nil {
 		klog.Fatalf("print error: %v", err)
 	}
-	klog.V(3).Infof("print done", "rows", len(resp.Rows))
+	klog.V(3).Info("print done", "rows", len(resp.Rows))
 
 	// if pprof server is configured, keep the program running
 	if *pprofAddr != "" {
