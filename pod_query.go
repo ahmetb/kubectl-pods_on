@@ -31,8 +31,8 @@ import (
 )
 
 func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient, nodeNames sets.Set[string],
-	useWatchCache bool) (metav1.Table, error) {
-	resp, err := queryPods(ctx, restClient, podQueryOpts{useWatchCache: useWatchCache})
+	useWatchCache bool, namespace string) (metav1.Table, error) {
+	resp, err := queryPods(ctx, restClient, podQueryOpts{useWatchCache: useWatchCache, namespace: namespace})
 	if err != nil {
 		return metav1.Table{}, fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -50,7 +50,7 @@ func findPodsByQueryingAllPods(ctx context.Context, restClient *rest.RESTClient,
 
 // findPodsByQueryingNodesInParallel performs parallel queries to list pods by node.
 func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RESTClient, nodeNames []string,
-	numWorkers int64, useWatchCache bool) (metav1.Table, error) {
+	numWorkers int64, useWatchCache bool, namespace string) (metav1.Table, error) {
 	var (
 		out metav1.Table
 		mu  sync.Mutex
@@ -62,6 +62,7 @@ func findPodsByQueryingNodesInParallel(ctx context.Context, restClient *rest.RES
 		g.Go(func() error {
 			resp, err := queryPods(ctx, restClient, podQueryOpts{
 				fieldSelectorNodeName: node,
+				namespace:             namespace,
 				useWatchCache:         useWatchCache,
 			})
 			if err != nil {
@@ -110,6 +111,7 @@ func parsePods(t *metav1.Table) error {
 
 type podQueryOpts struct {
 	fieldSelectorNodeName string
+	namespace             string
 	useWatchCache         bool
 }
 
@@ -127,6 +129,9 @@ func queryPods(ctx context.Context, restClient *rest.RESTClient, opts podQueryOp
 			SetHeader("Accept", "application/json;as=Table;v=v1;g=meta.k8s.io,application/json").
 			Param("includeObject", string(metav1.IncludeObject)).
 			Param("limit", "1000")
+		if opts.namespace != "" {
+			req = req.Namespace(opts.namespace)
+		}
 		if opts.fieldSelectorNodeName != "" {
 			req = req.Param("fieldSelector", "spec.nodeName="+opts.fieldSelectorNodeName)
 		}

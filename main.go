@@ -137,10 +137,12 @@ Options:`)
 	var resp metav1.Table
 	switch queryStrategy {
 	case queryAllPods:
-		resp, err = findPodsByQueryingAllPods(ctx, podsRestClient, matchedNodes, *useWatchCache)
+		resp, err = findPodsByQueryingAllPods(ctx, podsRestClient, matchedNodes,
+			*useWatchCache, *kubeConfigFlags.Namespace)
 	case queryPodPerNodeInParallel:
 		klog.V(1).Infof("querying list of pods on each node in parallel (workers: %d)", *numWorkers)
-		resp, err = findPodsByQueryingNodesInParallel(ctx, podsRestClient, matchedNodes.UnsortedList(), *numWorkers, *useWatchCache)
+		resp, err = findPodsByQueryingNodesInParallel(ctx, podsRestClient, matchedNodes.UnsortedList(),
+			*numWorkers, *useWatchCache, *kubeConfigFlags.Namespace)
 	default:
 		klog.Fatalf("unknown pod query strategy: %q", queryStrategy)
 	}
