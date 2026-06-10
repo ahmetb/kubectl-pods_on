@@ -31,6 +31,11 @@ import (
 func addKlogFlags(flagSet *pflag.FlagSet) {
 	klogFlagSet := flag.NewFlagSet("ignored", flag.ExitOnError)
 	klog.InitFlags(klogFlagSet)
+	// Opt into the new klog behavior so that -stderrthreshold is honored even
+	// when -logtostderr=true (the default).
+	// Ref: kubernetes/klog#212, kubernetes/klog#432
+	_ = klogFlagSet.Set("legacy_stderr_threshold_behavior", "false")
+	_ = klogFlagSet.Set("stderrthreshold", "INFO")
 	flagSet.AddGoFlagSet(klogFlagSet)
 }
 
